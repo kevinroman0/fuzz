@@ -3,6 +3,7 @@ import json
 import csv  
 import urllib.request
 import pandas as pd
+import os
 #california natural resource agency 
 url = 'https://data.cnra.ca.gov/api/3/action/datastore_search?resource_id=8ea91e09-3c84-4eba-9489-3ab3b08adfd0&limit=10000' 
 # Send a GET request to the API
@@ -87,6 +88,8 @@ else:
     print(reponsew.status_code)
 df_call = pd.read_csv('exported_data/sorted_by_year_ca.csv') # incident_date_last_update,incident_date_created,incident_longitude,incident_latitude <- plug this into the api 
 
+
+all_weather_data = []
 for index, row in df_call.iterrows():
 
     latitude = row['incident_latitude']
@@ -98,7 +101,26 @@ for index, row in df_call.iterrows():
     response = requests.get(url)
     if response.ok:
         data = response.json()
-        pd.DataFrame(data).to_csv('exported_data/weather_data.csv')
-    else:
-        print(f"API call failed for latitude {latitude}, longitude {longitude}")
-        print(response.status_code)
+        #pd.DataFrame(data).to_csv('exported_data/weather_data.csv')
+        new_df = pd.DataFrame(data["daily"])  # Extract the 'daily' data
+        new_df['incident_latitude'] = latitude
+        new_df['incident_longitude'] = longitude
+        new_df['incident_date_created'] = start_date
+        new_df['incident_date_last_update'] = end_date
+        # Define the file path
+        all_weather_data.append(new_df)
+        file_path = 'exported_data/weather_data.csv'
+    if all_weather_data:
+        combined_df = pd.concat(all_weather_data, ignore_index=True)  # CHANGED: Combine all data at once
+
+        # Define the file path
+        file_path = 'exported_data/weather_data.csv'
+
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)  # CHANGED: Ensure directory exists before saving
+
+        # Save the combined DataFrame to the CSV file
+        combined_df.to_csv(file_path, index=False)
+        
+
+    
