@@ -33,8 +33,6 @@ df1['ALARM_DATE'] = pd.to_datetime(df1['ALARM_DATE'], errors='coerce') # convert
 df1_sorted = df1.sort_values(by = 'ALARM_DATE', ascending=False) # filter the data by alarm_date
 df1_sorted.to_csv('exported_data/cnra_data_sorted.csv', index=False) # save the filtered data to a new csv file
 
-
-
 #order by incident_date_created  
 # Read the CSV file
 df2 = pd.read_csv('dont_delete/fire_ca.csv')
@@ -69,15 +67,38 @@ df_sorted.to_csv('exported_data/sorted_by_year_ca.csv', index=False)
 # Is _active 
 # Calfire_incident 
 # notfication _desired
-
-
 df3 = pd.read_csv('exported_data/sorted_by_year_ca.csv')
     # Remove multiple columns
 columns_to_remove = ['incident_is_final', 'incident_administrative_unit','incident_administrative_unit_url', 'incident_control','incident_cooperating_agencies','incident_id','incident_url','incident_dateonly_created','is_active','calfire_incident','notification_desired', 'incident_dateonly_extinguished']
 df3.drop(columns=columns_to_remove, axis=1, inplace=True)
 df3.to_csv('exported_data/sorted_by_year_ca.csv')
 
+# making the weather api
+# we'll do daily
+import pprint
 
+reponsew = requests.get("https://archive-api.open-meteo.com/v1/era5?latitude=52.52&longitude=13.41&temperature_unit=fahrenheit&wind_speed_unit=mph&start_date=2021-01-01&end_date=2021-01-31&daily=temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_gusts_10m_max" )
+# if succesfull will  get 200
+if(reponsew.ok):
+    print("yn cougar")
+    #print(reponsew.json())
+else:
+    print("get this cougar away from me steve- Lamelo Ball 20xx")
+    print(reponsew.status_code)
+df_call = pd.read_csv('exported_data/sorted_by_year_ca.csv') # incident_date_last_update,incident_date_created,incident_longitude,incident_latitude <- plug this into the api 
 
+for index, row in df_call.iterrows():
 
-
+    latitude = row['incident_latitude']
+    longitude = row['incident_longitude']
+    start_date = row['incident_date_created'].split(" ")[0]
+    end_date = row['incident_date_last_update'].split("T")[0]
+    # Make the API request for each location
+    url = f"https://archive-api.open-meteo.com/v1/era5?latitude={latitude}&longitude={longitude}&temperature_unit=fahrenheit&wind_speed_unit=mph&start_date={start_date}&end_date={end_date}&daily=temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_gusts_10m_max"
+    response = requests.get(url)
+    if response.ok:
+        data = response.json()
+        pd.DataFrame(data).to_csv('exported_data/weather_data.csv')
+    else:
+        print(f"API call failed for latitude {latitude}, longitude {longitude}")
+        print(response.status_code)
