@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 import json
 import os
+import time
 
 
 from pymongo import MongoClient
@@ -27,7 +28,7 @@ df_input = pd.read_csv(csv)
 
 # api limit has 
 
-for _, row in df_input.iterrows():
+for i, row in df_input.iterrows():
     lat = row['incident_latitude']
     lon = row['incident_longitude']
     name = row['incident_name']
@@ -73,12 +74,17 @@ for _, row in df_input.iterrows():
     # url = f'https://history.openweathermap.org/data/2.5/history/city?lat={lat}&lon={lon}&start={start_date}&end={end_date}&type=hour&appid=3459df5824c519bea0f8fa026299b5ef' 
     url = f'https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&hourly={listy}&timezone=America/Los_Angeles'
     response = requests.get(url)
+
+
+
     if response.status_code == 200:
+        if i != 0 and i % 500 == 0:
+            time.sleep(60) # Sleep for 60 seconds after every 600 requests to avoid hitting API limits
+        
         data = response.json()
         data['incident_name'] = name    #adds the incident name
         # json_str = json.dumps(data)
         collection.insert_one(data)
-        
         # df = pd.DataFrame([[json_str]], columns=["json_response"])
         
         # file_exists = os.path.exists(output_file)
