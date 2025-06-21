@@ -5,8 +5,6 @@ import requests
 import json
 import os
 import time
-
-
 from pymongo import MongoClient
 
 # Connect to MongoDB (adjust the URI as needed)
