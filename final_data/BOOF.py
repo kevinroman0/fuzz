@@ -1,98 +1,121 @@
-
-
 import pandas as pd
 import requests
-import json
-import os
 import time
+import ee
 from pymongo import MongoClient
+from retrying import retry
+from datetime import datetime
 
-# Connect to MongoDB (adjust the URI as needed)
+# Initialize Earth Engine
+ee.Initialize(project='fuzz-464001')
 
+# MongoDB setup
 uri = "mongodb+srv://romankevin176:d2ew7cN9U3VMV0Yj@fuzz.vkfskgo.mongodb.net/?retryWrites=true&w=majority&appName=fuzz"
-# Create a new client and connect to the server
+client = MongoClient(uri)
+db = client['weather_db']
+collection = db['history_weather']
+collection.delete_many({})  # Clear existing data
 
-client = MongoClient(uri)  # default local MongoDB
-db = client['weather_db']  # Database name
-collection = db['history_weather']  # Collection name
-collection.delete_many({})  # Clear the collection before inserting new data
-csv = '../dont_delete/sorted_by_year.csv'
+# Load incident data
+csv_path = '../dont_delete/sorted_by_year.csv'
+df_input = pd.read_csv(csv_path)
 
+# LANDFIRE datasets to fetch (updated to modern versions)
+LANDFIRE_DATASETS = {
+    'EVT': 'LANDFIRE/US_200/ExistingVegetationType',  # Vegetation type
+    'EVH': 'LANDFIRE/US_200/ExistingVegetationHeight',  # Vegetation height (biomass proxy)
+    'FBFM40': 'LANDFIRE/US_200/FBFM40',  # Fuel models
+    'CC': 'LANDFIRE/US_200/ForestCanopyCover'  # Canopy cover (%)
+}
 
-output_file = 'out.csv'
+def retry_if_ee_error(exception):
+    """Retry on Earth Engine errors."""
+    return isinstance(exception, ee.EEException)
 
-df_input = pd.read_csv(csv)
-
-
-
-for i, row in df_input.iterrows():
-    lat = row['incident_latitude']
-    lon = row['incident_longitude']
-    name = row['incident_name']
-
-    start_date = row['incident_date_created'].split(' ')[0]
-    end_date = str(str(row['incident_date_extinguished']).split('T')[0])
-    print(start_date)
-    print(end_date)
-    burned = row['incident_acres_burned']
+@retry(retry_on_exception=retry_if_ee_error, stop_max_attempt_number=3, wait_fixed=2000)
+def get_gee_data(lat, lon):
+    """Fetch LANDFIRE and other fire-relevant data from GEE."""
+    point = ee.Geometry.Point([lon, lat])
+    results = {}
     
+    for band, dataset in LANDFIRE_DATASETS.items():
+        try:
+            img = ee.Image(dataset)
+            value = img.reduceRegion(
+                reducer=ee.Reducer.first(),
+                geometry=point,
+                scale=30,
+                maxPixels=1e9
+            ).get(band).getInfo()
+            results[band] = value
+        except Exception as e:
+            print(f"Error fetching {band}: {e}")
+            results[band] = None
+    
+    return results if any(results.values()) else None
 
-    # 🌤 WEATHER API
-    listy = ",".join([
+def fetch_weather_data(lat, lon, start_date, end_date):
+    """Fetch historical weather data from Open-Meteo."""
+    params = [
         "temperature_2m", "relative_humidity_2m", "dew_point_2m",
-        "apparent_temperature", "pressure_msl", "surface_pressure",
-        "cloudcover", "cloudcover_low", "cloudcover_mid", "cloudcover_high",
-        "windspeed_10m", "windgusts_10m", "winddirection_10m",
-        "shortwave_radiation", "direct_radiation", "diffuse_radiation",
-        "direct_normal_irradiance", "terrestrial_radiation",
-        "precipitation", "rain", "snowfall", "weathercode",
-        "et0_fao_evapotranspiration", "vapour_pressure_deficit",
-        "soil_temperature_0cm", "soil_temperature_6cm",
-        "soil_temperature_18cm", "soil_temperature_54cm",
-        "soil_moisture_0_1cm", "soil_moisture_1_3cm",
-        "soil_moisture_3_9cm", "soil_moisture_9_27cm",
-        "soil_moisture_27_81cm"
-    ])
-    weather_url = f'https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&hourly={listy}&timezone=America/Los_Angeles'
-    weather_resp = requests.get(weather_url)
+        "wind_speed_10m", "precipitation"  # Added wind and precipitation for fire risk
+    ]
+    url = (
+        f"https://archive-api.open-meteo.com/v1/archive?"
+        f"latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
+        f"&hourly={','.join(params)}&timezone=America/Los_Angeles"
+    )
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Weather API failed: {e}")
+        return None
 
-    # 🌲 LANDFIRE API
-    landfire_url = "https://landfire.cr.usgs.gov/arcgis/rest/services/Landfire/LF_2020/MapServer/identify"
-    params = {
-        "geometry": f"{lon},{lat}",
-        "geometryType": "esriGeometryPoint",
-        "sr": 4326,
-        "layers": "all",  # or specify layer IDs (e.g., "5" for fuel models)
-        "tolerance": 2,
-        "f": "json"
-    }
+# Main processing loop
+for i, row in df_input.iterrows():
+    try:
+        lat = row['incident_latitude']
+        lon = row['incident_longitude']
+        name = row['incident_name']
+        start_date = str(row['incident_date_created']).split(' ')[0]
+        end_date = str(row['incident_date_extinguished']).split('T')[0]
+        burned = row['incident_acres_burned']
 
-    landfire_resp = requests.get(landfire_url, params=params)
+        print(f"\nProcessing {i+1}/{len(df_input)}: {name} at ({lat}, {lon})")
 
-    # ✅ Insert into MongoDB if both responses are good
-    if weather_resp.status_code == 200 and landfire_resp.status_code == 200:
-        weather_data = weather_resp.json()
-        landfire_data = landfire_resp.json()
+        # Fetch weather data
+        weather_data = fetch_weather_data(lat, lon, start_date, end_date)
+        if not weather_data:
+            continue
 
-        combined_doc = {
+        # Fetch GEE (LANDFIRE) data
+        gee_data = get_gee_data(lat, lon)
+        if not gee_data:
+            print(f"Skipping {name} - no LANDFIRE data")
+            continue
+
+        # Compile document for MongoDB
+        doc = {
             "incident_name": name,
             "location": {"lat": lat, "lon": lon},
-            "incident_acres_burned": burned,
-            "weather_data": weather_data,
-            "fuel_data": landfire_data
+            "dates": {"start": start_date, "end": end_date},
+            "acres_burned": burned,
+            "weather": weather_data,
+            "landfire": gee_data,
+            "processed_at": datetime.utcnow().isoformat()
         }
 
-        collection.insert_one(combined_doc)
-        print(f"Inserted weather + fuel data for {name} at {lat},{lon}")
+        # Insert into MongoDB
+        collection.insert_one(doc)
+        print(f"✅ Saved {name}")
 
-        if i != 0 and i % 500 == 0:
-            time.sleep(60)  # Avoid API rate limits
+        # Rate limiting (1 request every 2 seconds)
+        time.sleep(2) if i % 10 == 0 else None
 
-    else:
-        if weather_resp.status_code != 200:
-            print(f"Weather API failed for {name}: {weather_resp.status_code}")
-            print(weather_resp.text)
+    except Exception as e:
+        print(f"🚨 Error on row {i}: {e}")
+        continue
 
-        if landfire_resp.status_code != 200:
-            print(f"LANDFIRE API failed for {name}: {landfire_resp.status_code}")
-            print(landfire_resp.text)
+print("\nProcessing complete! Data saved to MongoDB.")
