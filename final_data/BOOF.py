@@ -17,7 +17,10 @@ collection = db['history_weather']
 collection.delete_many({})  # Clear existing data
 
 # Load incident data
+
+
 csv_path = '../dont_delete/sorted_by_year.csv'
+
 df_input = pd.read_csv(csv_path)
 
 # LANDFIRE datasets to fetch (updated to modern versions)
@@ -34,6 +37,7 @@ def retry_if_ee_error(exception):
 
 @retry(retry_on_exception=retry_if_ee_error, stop_max_attempt_number=3, wait_fixed=2000)
 def get_gee_data(lat, lon):
+
     """Fetch LANDFIRE and other fire-relevant data from GEE."""
     point = ee.Geometry.Point([lon, lat])
     results = {}
@@ -53,6 +57,10 @@ def get_gee_data(lat, lon):
             results[band] = None
     
     return results if any(results.values()) else None
+
+
+
+
 
 def fetch_weather_data(lat, lon, start_date, end_date):
     """Fetch historical weather data from Open-Meteo."""
@@ -90,7 +98,7 @@ for i, row in df_input.iterrows():
         if not weather_data:
             continue
 
-        # Fetch GEE (LANDFIRE) data
+        #using google earth engine to get LANDFIRE data
         gee_data = get_gee_data(lat, lon)
         if not gee_data:
             print(f"Skipping {name} - no LANDFIRE data")
